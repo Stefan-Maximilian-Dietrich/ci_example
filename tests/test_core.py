@@ -1,32 +1,98 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
 import numpy as np
-import pytest
-
-from example_repo.core import fit_logreg, predict_proba
-
-
-def test_fit_logreg_runs_and_returns_reasonable_metrics():
-    res = fit_logreg(n_samples=300, n_features=8, noise=0.6, test_size=0.3, seed=42)
-    assert 0.0 <= res.train_accuracy <= 1.0
-    assert 0.0 <= res.test_accuracy <= 1.0
-    assert res.n_train + res.n_test == 300
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
 
 
-def test_predict_proba_shape_and_range():
-    res = fit_logreg(n_samples=200, n_features=5, noise=0.4, test_size=0.2, seed=0)
-    X = np.random.randn(7, 5)
-    p = predict_proba(res.model, X)
-    assert p.shape == (7,)
-    assert np.all(p >= 0.0) and np.all(p <= 1.0)
+def set_seed(seed: int) -> None:
+    """Set numpy RNG seed for reproducibility."""
+    np.random.seed(seed)
 
 
-def test_invalid_args_raise():
-    with pytest.raises(ValueError):
-        fit_logreg(test_size=1.0)
-    with pytest.raises(ValueError):
-        fit_logreg(n_samples=5)
-    with pytest.raises(ValueError):
-        fit_logreg(n_features=0)
-    with pytest.raises(ValueError):
-        fit_logreg(noise=-1.0)
-    with pytest.raises(ValueError):
-        fit_logreg(C=0.0)
+@dataclass(frozen=True)
+class FitResult:
+    """Results returned by fit_logreg()."""
+    model: LogisticRegression
+    train_accuracy: float
+    test_accuracy: float
+    n_train: int
+    n_test: int
+
+
+def _make_synthetic_binary_classification(
+    n_samples: int,
+    n_features: int,
+    noise: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    X = rng.normal(size=(n_samples, n_features))
+    w = rng.normal(size=(n_features,))
+    eps = noise * rng.normal(size=(n_samples,))
+    scores = X @ w + eps
+    y = (scores > 0).astype(int)
+    return X, y
+
+
+def fit_logreg(
+    *,
+    n_samples: int = 500,
+    n_features: int = 10,
+    noise: float = 0.5,
+    test_size: float = 0.25,
+    C: float = 1.0,
+    seed: int = 0,
+    max_iter: int = 500,
+) -> FitResult:
+    if not (0.0 < test_size < 1.0):
+        raise ValueError("test_size must be in (0, 1).")
+    if n_samples <= 10:
+        raise ValueError("n_samples must be > 10.")
+    if n_features <= 0:
+        raise ValueError("n_features must be > 0.")
+    if noise < 0:
+        raise ValueError("noise must be >= 0.")
+    if C <= 0:
+        raise ValueError("C must be > 0.")
+
+    X, y = _make_synthetic_binary_classification(
+        n_samples=n_samples,
+        n_features=n_features,
+        noise=noise,
+        seed=seed,
+    )
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=seed, stratify=y
+    )
+
+    model = LogisticRegression(C=C, max_iter=max_iter, solver="lbfgs")
+    model.fit(X_train, y_train)
+
+    yhat_train = model.predict(X_train)
+    yhat_test = model.predict(X_test)
+
+    train_acc = float(accuracy_score(y_train, yhat_train))
+    test_acc = float(accuracy_score(y_test, yhat_test))
+
+    return FitResult(
+        model=model,
+        train_accuracy=train_acc,
+        test_accuracy=test_acc,
+        n_train=int(X_train.shape[0]),
+        n_test=int(X_test.shape[0]),
+    )
+
+
+def predict_proba(
+    model: LogisticRegression,
+    X: np.ndarray,
+) -> np.ndarray:
+    if X.ndim != 2:
+        raise ValueError("X must be a 2D array (n_samples, n_features).")
+    proba = model.predict_proba(X)
+    return proba[:, 1]

@@ -1,0 +1,2 @@
+[console_scripts]
+example-repo = example_repo.cli:main
